@@ -160,8 +160,23 @@ function Library:CreateWindow(config)
     local title = config.Title or "Dark Library"
     local size = config.Size or UDim2.fromOffset(520, 380)
     
+    -- Determine parent: CoreGui when not in Studio, PlayerGui in Studio
+    local guiParent
+    if not IsStudio then
+        -- Non-studio (exploit) environment: use CoreGui or gethui
+        if syn and syn.protect_gui then
+            guiParent = game:GetService("CoreGui")
+        elseif gethui then
+            guiParent = gethui()
+        else
+            guiParent = game:GetService("CoreGui")
+        end
+    else
+        guiParent = Player.PlayerGui
+    end
+    
     -- Destroy existing
-    local existing = Player.PlayerGui:FindFirstChild("DarkLibrary")
+    local existing = guiParent:FindFirstChild("DarkLibrary")
     if existing then existing:Destroy() end
     
     local ScreenGui = Create("ScreenGui", {
@@ -169,15 +184,12 @@ function Library:CreateWindow(config)
         ResetOnSpawn = false,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
-        Parent = Player.PlayerGui,
+        Parent = guiParent,
     })
     
     -- Protected gui for exploits
-    if syn and syn.protect_gui then
+    if not IsStudio and syn and syn.protect_gui then
         syn.protect_gui(ScreenGui)
-        ScreenGui.Parent = game:GetService("CoreGui")
-    elseif gethui then
-        ScreenGui.Parent = gethui()
     end
     
     -- UI Scale (auto-detect device and scale accordingly)
@@ -336,7 +348,11 @@ function Library:CreateWindow(config)
     CloseBtn.MouseLeave:Connect(function()
         Tween(CloseBtn, { TextColor3 = Theme.TextDim }, 0.15)
     end)
+    local closing = false
     CloseBtn.MouseButton1Click:Connect(function()
+        if closing then return end
+        closing = true
+        
         -- Disable interaction
         Main.Active = false
         
@@ -362,8 +378,10 @@ function Library:CreateWindow(config)
         end
         
         task.delay(closeDuration + 0.05, function()
-            CleanupAll()
-            ScreenGui:Destroy()
+            pcall(CleanupAll)
+            if ScreenGui and ScreenGui.Parent then
+                ScreenGui:Destroy()
+            end
         end)
     end)
     
