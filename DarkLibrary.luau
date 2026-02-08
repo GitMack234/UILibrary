@@ -168,6 +168,7 @@ function Library:CreateWindow(config)
         Name = "DarkLibrary",
         ResetOnSpawn = false,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
         Parent = Player.PlayerGui,
     })
     
@@ -580,10 +581,21 @@ function Library:CreateWindow(config)
         return data
     end
     
+    --- Check if file system functions are available (exploit executors only)
+    local function HasFileSystem()
+        return typeof(rawget(_G, "writefile") or writefile) == "function"
+            or (typeof(writefile) == "function")
+    end
+
     --- Save config to file (exploit executors only)
     function Window:SaveConfig(name)
         if IsStudio then
             warn("[DarkLibrary] Config saving is not available in Studio")
+            return false
+        end
+        if not pcall(function() return writefile and readfile and isfile and isfolder and makefolder end) then
+            warn("[DarkLibrary] File system functions are not available in this environment")
+            self:Notify({ Title = "Config Error", Content = "File system not available in this environment.", Duration = 4 })
             return false
         end
         name = name or self._configName
@@ -613,13 +625,18 @@ function Library:CreateWindow(config)
             warn("[DarkLibrary] Config loading is not available in Studio")
             return false
         end
+        if not pcall(function() return readfile and isfile and isfolder end) then
+            warn("[DarkLibrary] File system functions are not available in this environment")
+            self:Notify({ Title = "Config Error", Content = "File system not available in this environment.", Duration = 4 })
+            return false
+        end
         name = name or self._configName
         local folder = self._configFolder
         local filePath = folder .. "/" .. name .. ".json"
         
         local success, err = pcall(function()
             if not isfile(filePath) then
-                error("Config file not found: " .. name)
+                error('Config file not found: "' .. name .. '". Save a config first.')
             end
             local json = readfile(filePath)
             local data = HttpService:JSONDecode(json)
@@ -676,13 +693,25 @@ function Library:CreateWindow(config)
     --- Delete a config file
     function Window:DeleteConfig(name)
         if IsStudio then return false end
+        if not pcall(function() return isfile and delfile end) then
+            warn("[DarkLibrary] File system functions are not available in this environment")
+            self:Notify({ Title = "Config Error", Content = "File system not available in this environment.", Duration = 4 })
+            return false
+        end
         name = name or self._configName
         local filePath = self._configFolder .. "/" .. name .. ".json"
-        local success = pcall(function()
+        local success, err = pcall(function()
             if isfile(filePath) then
                 delfile(filePath)
+                self:Notify({ Title = "Config Deleted", Content = 'Deleted "' .. name .. '"', Duration = 3 })
+            else
+                self:Notify({ Title = "Not Found", Content = 'Config "' .. name .. '" does not exist.', Duration = 3 })
             end
         end)
+        if not success then
+            warn("[DarkLibrary] Failed to delete config:", err)
+            self:Notify({ Title = "Delete Failed", Content = tostring(err), Duration = 4 })
+        end
         return success
     end
     
@@ -1838,14 +1867,16 @@ function Library:CreateWindow(config)
     
     local notifHolder = Create("Frame", {
         BackgroundTransparency = 1,
-        Size = UDim2.new(0, 260, 1, -20),
-        Position = UDim2.new(1, -270, 0, 10),
+        Size = UDim2.new(0, 260, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Position = UDim2.new(0.5, -130, 0, 10),
         ClipsDescendants = false,
         Parent = ScreenGui,
     })
-    AddListLayout(notifHolder, 6, Enum.FillDirection.Vertical, Enum.HorizontalAlignment.Right, Enum.VerticalAlignment.Bottom)
+    AddListLayout(notifHolder, 6, Enum.FillDirection.Vertical, Enum.HorizontalAlignment.Center, Enum.VerticalAlignment.Top)
     
     function Window:Notify(cfg)
+        if Window._destroyed then return end
         cfg = cfg or {}
         local notifTitle = cfg.Title or "Notification"
         local notifContent = cfg.Content or ""
@@ -1863,16 +1894,6 @@ function Library:CreateWindow(config)
         AddPadding(notif, 10, 10, 12, 12)
         
         local notifLayout = AddListLayout(notif, 2)
-        
-        -- Accent top bar
-        Create("Frame", {
-            BackgroundColor3 = Theme.Accent,
-            Size = UDim2.new(1, 24, 0, 2),
-            Position = UDim2.new(0, -12, 0, -10),
-            BorderSizePixel = 0,
-            Parent = notif,
-            LayoutOrder = -1,
-        })
         
         Create("TextLabel", {
             Text = notifTitle,
@@ -1902,14 +1923,31 @@ function Library:CreateWindow(config)
             })
         end
         
-        -- Slide in
-        notif.Position = UDim2.new(1, 0, 0, 0)
-        Tween(notif, { Position = UDim2.new(0, 0, 0, 0) }, 0.25)
+        -- Slide in from top
+        notif.Position = UDim2.new(0, 0, 0, -60)
+        notif.BackgroundTransparency = 1
+        Tween(notif, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.3)
+        -- Fade in text children
+        for _, child in ipairs(notif:GetChildren()) do
+            if child:IsA("TextLabel") then
+                child.TextTransparency = 1
+                Tween(child, { TextTransparency = 0 }, 0.3)
+            end
+        end
         
         task.delay(duration, function()
-            Tween(notif, { Position = UDim2.new(1, 0, 0, 0) }, 0.25)
+            if Window._destroyed then
+                pcall(function() notif:Destroy() end)
+                return
+            end
+            Tween(notif, { Position = UDim2.new(0, 0, 0, -60), BackgroundTransparency = 1 }, 0.25)
+            for _, child in ipairs(notif:GetChildren()) do
+                if child:IsA("TextLabel") then
+                    Tween(child, { TextTransparency = 1 }, 0.25)
+                end
+            end
             task.delay(0.3, function()
-                notif:Destroy()
+                pcall(function() notif:Destroy() end)
             end)
         end)
     end
@@ -1923,7 +1961,9 @@ function Library:CreateWindow(config)
     TrackConnection(UserInputService.InputBegan:Connect(function(input, processed)
         if Window._destroyed then return end
         if not processed and input.KeyCode == toggleKey then
-            Main.Visible = not Main.Visible
+            local vis = not Main.Visible
+            Main.Visible = vis
+            notifHolder.Visible = vis
         end
     end))
     
@@ -1933,6 +1973,14 @@ function Library:CreateWindow(config)
     
     function Window:Destroy()
         CleanupAll()
+        -- Destroy any remaining notifications
+        pcall(function()
+            for _, child in ipairs(notifHolder:GetChildren()) do
+                if child:IsA("Frame") then
+                    child:Destroy()
+                end
+            end
+        end)
         ScreenGui:Destroy()
     end
     
