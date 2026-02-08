@@ -2083,7 +2083,7 @@ function Library:CreateWindow(config)
     
     TrackConnection(UserInputService.InputBegan:Connect(function(input, processed)
         if Window._destroyed then return end
-        if not processed and input.KeyCode == toggleKey then
+        if input.KeyCode == toggleKey then
             local vis = not Main.Visible
             Main.Visible = vis
             notifHolder.Visible = vis
