@@ -1078,14 +1078,27 @@ function Library:CreateWindow(config)
                 Tween(knob, { Position = state and UDim2.new(1, -19, 0.5, 0) or UDim2.new(0, 3, 0.5, 0) }, 0.2)
             end
             
-            btn.MouseButton1Click:Connect(function()
+            local function DoToggle()
                 if Window._destroyed then return end
                 state = not state
                 UpdateToggle()
                 if cfg.Callback then
                     task.spawn(cfg.Callback, state)
                 end
-            end)
+            end
+            
+            btn.MouseButton1Click:Connect(DoToggle)
+            
+            -- HoldKey: bind a keyboard key to toggle this on/off
+            if cfg.HoldKey then
+                TrackConnection(UserInputService.InputBegan:Connect(function(input, processed)
+                    if processed then return end
+                    if Window._destroyed then return end
+                    if input.KeyCode == cfg.HoldKey or input.UserInputType == cfg.HoldKey then
+                        DoToggle()
+                    end
+                end))
+            end
             
             btn.MouseEnter:Connect(function()
                 Tween(card, { BackgroundColor3 = Theme.CardHover }, 0.12)
