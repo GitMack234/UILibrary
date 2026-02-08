@@ -355,6 +355,19 @@ function Library:CreateWindow(config)
         
         -- Disable interaction
         Main.Active = false
+
+        -- Disable all active toggles and fire callbacks
+        Window:DisableAll()
+
+        -- Fire OnClose callbacks
+        for _, cb in ipairs(Window._onCloseCallbacks) do
+            task.spawn(cb)
+        end
+        
+        -- Hide all color pickers
+        for _, picker in ipairs(Window._pickers) do
+            if picker and picker.Parent then picker.Visible = false end
+        end
         
         -- Shift + fade out
         local closeDuration = 0.35
@@ -413,6 +426,10 @@ function Library:CreateWindow(config)
             TitleDivider.Visible = false
             TitleBarMask.Visible = false
             SidebarTopMask.Visible = false
+            -- Hide all color pickers
+            for _, picker in ipairs(Window._pickers) do
+                if picker and picker.Parent then picker.Visible = false end
+            end
         else
             Tween(Main, { Size = originalSize }, 0.25)
             TitleDivider.Visible = true
@@ -430,8 +447,10 @@ function Library:CreateWindow(config)
     Window._destroyed = false
     Window._connections = {}
     Window._flags = {}
+    Window._pickers = {}
     Window._configName = config.ConfigName or "default"
     Window._configFolder = config.ConfigFolder or "DarkLibrary"
+    Window._onCloseCallbacks = {}
 
     --- Track a connection for cleanup on destroy
     local function TrackConnection(conn)
@@ -574,6 +593,26 @@ function Library:CreateWindow(config)
     function Window:_RegisterFlag(flag, element)
         if flag and flag ~= "" then
             self._flags[flag] = element
+        end
+    end
+
+    --- Register a callback to run when the window is closed/destroyed
+    function Window:OnClose(callback)
+        if callback and typeof(callback) == "function" then
+            table.insert(self._onCloseCallbacks, callback)
+        end
+    end
+
+    --- Disable all toggle flags (set to false) and fire their callbacks
+    function Window:DisableAll()
+        for flag, element in pairs(self._flags) do
+            local val = element:Get()
+            if typeof(val) == "boolean" and val == true then
+                element:Set(false)
+                if element._callback then
+                    task.spawn(element._callback, false)
+                end
+            end
         end
     end
     
@@ -1622,6 +1661,7 @@ function Library:CreateWindow(config)
             AddCorner(pickerPanel, Theme.CornerRadius)
             AddStroke(pickerPanel, Theme.Border, 1)
             AddPadding(pickerPanel, 8, 8, 8, 8)
+            table.insert(Window._pickers, pickerPanel)
             
             -- Forward-declare color picking flags
             local pickingSV = false
@@ -1829,7 +1869,9 @@ function Library:CreateWindow(config)
                 Parent = card,
             })
             
+            local pickerFading = false
             colorBtn.MouseButton1Click:Connect(function()
+                if pickerFading then return end
                 pickerOpen = not pickerOpen
                 if pickerOpen then
                     -- Position picker to the right of Main frame, vertically centered
@@ -1838,8 +1880,53 @@ function Library:CreateWindow(config)
                     local x = mainPos.X + mainSize.X + 12
                     local y = mainPos.Y + (mainSize.Y - 170) / 2
                     pickerPanel.Position = UDim2.fromOffset(x, y)
+                    
+                    -- Fade in
+                    pickerPanel.Visible = true
+                    pickerPanel.BackgroundTransparency = 1
+                    Tween(pickerPanel, { BackgroundTransparency = 0 }, 0.2)
+                    local pickerStroke = pickerPanel:FindFirstChildOfClass("UIStroke")
+                    if pickerStroke then
+                        pickerStroke.Transparency = 1
+                        Tween(pickerStroke, { Transparency = 0 }, 0.2)
+                    end
+                    for _, desc in ipairs(pickerPanel:GetDescendants()) do
+                        if desc:IsA("Frame") then
+                            desc.BackgroundTransparency = 1
+                            Tween(desc, { BackgroundTransparency = 0 }, 0.2)
+                        elseif desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox") then
+                            desc.BackgroundTransparency = 1
+                            desc.TextTransparency = 1
+                            Tween(desc, { BackgroundTransparency = 0, TextTransparency = 0 }, 0.2)
+                        elseif desc:IsA("UIStroke") then
+                            desc.Transparency = 1
+                            Tween(desc, { Transparency = 0 }, 0.2)
+                        elseif desc:IsA("UIGradient") then
+                            -- skip, gradients don't have transparency
+                        end
+                    end
+                else
+                    -- Fade out
+                    pickerFading = true
+                    Tween(pickerPanel, { BackgroundTransparency = 1 }, 0.2)
+                    local pickerStroke = pickerPanel:FindFirstChildOfClass("UIStroke")
+                    if pickerStroke then
+                        Tween(pickerStroke, { Transparency = 1 }, 0.2)
+                    end
+                    for _, desc in ipairs(pickerPanel:GetDescendants()) do
+                        if desc:IsA("Frame") then
+                            Tween(desc, { BackgroundTransparency = 1 }, 0.2)
+                        elseif desc:IsA("TextLabel") or desc:IsA("TextButton") or desc:IsA("TextBox") then
+                            Tween(desc, { BackgroundTransparency = 1, TextTransparency = 1 }, 0.2)
+                        elseif desc:IsA("UIStroke") then
+                            Tween(desc, { Transparency = 1 }, 0.2)
+                        end
+                    end
+                    task.delay(0.22, function()
+                        pickerPanel.Visible = false
+                        pickerFading = false
+                    end)
                 end
-                pickerPanel.Visible = pickerOpen
             end)
             
             card.MouseEnter:Connect(function()
@@ -1944,7 +2031,10 @@ function Library:CreateWindow(config)
         -- Slide in from top
         notif.Position = UDim2.new(0, 0, 0, -60)
         notif.BackgroundTransparency = 1
+        local notifStroke = notif:FindFirstChildOfClass("UIStroke")
+        if notifStroke then notifStroke.Transparency = 1 end
         Tween(notif, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.3)
+        if notifStroke then Tween(notifStroke, { Transparency = 0 }, 0.3) end
         -- Fade in text children
         for _, child in ipairs(notif:GetChildren()) do
             if child:IsA("TextLabel") then
@@ -1959,6 +2049,8 @@ function Library:CreateWindow(config)
                 return
             end
             Tween(notif, { Position = UDim2.new(0, 0, 0, -60), BackgroundTransparency = 1 }, 0.25)
+            local nStroke = notif:FindFirstChildOfClass("UIStroke")
+            if nStroke then Tween(nStroke, { Transparency = 1 }, 0.25) end
             for _, child in ipairs(notif:GetChildren()) do
                 if child:IsA("TextLabel") then
                     Tween(child, { TextTransparency = 1 }, 0.25)
@@ -1982,6 +2074,12 @@ function Library:CreateWindow(config)
             local vis = not Main.Visible
             Main.Visible = vis
             notifHolder.Visible = vis
+            -- Hide all color pickers when hiding UI
+            if not vis then
+                for _, picker in ipairs(Window._pickers) do
+                    if picker and picker.Parent then picker.Visible = false end
+                end
+            end
         end
     end))
     
@@ -1990,6 +2088,14 @@ function Library:CreateWindow(config)
     -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
     function Window:Destroy()
+        -- Disable all active toggles and fire callbacks
+        Window:DisableAll()
+
+        -- Fire OnClose callbacks
+        for _, cb in ipairs(Window._onCloseCallbacks) do
+            task.spawn(cb)
+        end
+
         CleanupAll()
         -- Destroy any remaining notifications
         pcall(function()
