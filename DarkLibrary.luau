@@ -238,6 +238,40 @@ function Library:CreateWindow(config)
     AddCorner(Main, Theme.CornerLarge)
     AddStroke(Main, Theme.Border, 1)
     
+    -- Window object (must be declared before button handlers that reference it)
+    local Window = {}
+    Window.Tabs = {}
+    Window.ActiveTab = nil
+    Window.ScreenGui = ScreenGui
+    Window.Main = Main
+    Window._destroyed = false
+    Window._connections = {}
+    Window._flags = {}
+    Window._pickers = {}
+    Window._configName = config.ConfigName or "default"
+    Window._configFolder = config.ConfigFolder or "DarkLibrary"
+    Window._onCloseCallbacks = {}
+
+    --- Track a connection for cleanup on destroy
+    local function TrackConnection(conn)
+        table.insert(Window._connections, conn)
+        return conn
+    end
+
+    --- Disconnect all tracked connections and mark as destroyed
+    local function CleanupAll()
+        Window._destroyed = true
+        for _, conn in ipairs(Window._connections) do
+            if conn.Connected then
+                conn:Disconnect()
+            end
+        end
+        table.clear(Window._connections)
+    end
+
+    -- Forward declaration for SidebarTopMask (created later in Sidebar section)
+    local SidebarTopMask
+
     -- Open Animation (shift + fade)
     local openDuration = 0.35
     local openStyle = Enum.EasingStyle.Quint
@@ -438,37 +472,6 @@ function Library:CreateWindow(config)
         end
     end)
     
-    -- Window object (forward-declared before first use)
-    local Window = {}
-    Window.Tabs = {}
-    Window.ActiveTab = nil
-    Window.ScreenGui = ScreenGui
-    Window.Main = Main
-    Window._destroyed = false
-    Window._connections = {}
-    Window._flags = {}
-    Window._pickers = {}
-    Window._configName = config.ConfigName or "default"
-    Window._configFolder = config.ConfigFolder or "DarkLibrary"
-    Window._onCloseCallbacks = {}
-
-    --- Track a connection for cleanup on destroy
-    local function TrackConnection(conn)
-        table.insert(Window._connections, conn)
-        return conn
-    end
-
-    --- Disconnect all tracked connections and mark as destroyed
-    local function CleanupAll()
-        Window._destroyed = true
-        for _, conn in ipairs(Window._connections) do
-            if conn.Connected then
-                conn:Disconnect()
-            end
-        end
-        table.clear(Window._connections)
-    end
-
     -- ── Dragging ──
     local dragging, dragStart, startPos
     
@@ -511,7 +514,7 @@ function Library:CreateWindow(config)
     AddCorner(Sidebar, Theme.CornerLarge)
     
     -- Only round bottom-left; mask top corners
-    local SidebarTopMask = Create("Frame", {
+    SidebarTopMask = Create("Frame", {
         BackgroundColor3 = Theme.Surface,
         Size = UDim2.new(1, 0, 0, 10),
         Position = UDim2.new(0, 0, 0, 0),
@@ -553,7 +556,7 @@ function Library:CreateWindow(config)
         Parent = Main,
     })
     
--- (Window, TrackConnection, CleanupAll declared above dragging section)
+-- (Window, TrackConnection, CleanupAll declared above open animation section)
     
     -- Auto-rescale on viewport resize (e.g. device rotation)
     local _autoScaleEnabled = true
