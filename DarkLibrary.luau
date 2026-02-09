@@ -633,7 +633,12 @@ function Library:CreateWindow(config)
             if typeof(value) == "Color3" then
                 data[flag] = { _type = "Color3", R = math.floor(value.R * 255), G = math.floor(value.G * 255), B = math.floor(value.B * 255) }
             elseif typeof(value) == "EnumItem" then
-                data[flag] = { _type = "EnumItem", EnumType = tostring(value.EnumType), Name = value.Name }
+                local enumTypeName = tostring(value.EnumType)
+                -- tostring(Enum.KeyCode) returns "Enum.KeyCode"; strip the prefix
+                if enumTypeName:sub(1, 5) == "Enum." then
+                    enumTypeName = enumTypeName:sub(6)
+                end
+                data[flag] = { _type = "EnumItem", EnumType = enumTypeName, Name = value.Name }
             else
                 data[flag] = value
             end
@@ -708,7 +713,12 @@ function Library:CreateWindow(config)
                     if type(value) == "table" and value._type == "Color3" then
                         element:Set(Color3.fromRGB(value.R, value.G, value.B))
                     elseif type(value) == "table" and value._type == "EnumItem" then
-                        local enumType = Enum[value.EnumType]
+                        local enumTypeStr = value.EnumType
+                        -- Handle both "KeyCode" and legacy "Enum.KeyCode" format
+                        if type(enumTypeStr) == "string" and enumTypeStr:sub(1, 5) == "Enum." then
+                            enumTypeStr = enumTypeStr:sub(6)
+                        end
+                        local enumType = Enum[enumTypeStr]
                         if enumType then
                             element:Set(enumType[value.Name])
                         end
@@ -1263,6 +1273,8 @@ function Library:CreateWindow(config)
             local obj = {}
             obj._callback = cfg.Callback
             function obj:Set(val)
+                -- Snap to increment for consistency
+                val = math.floor(val / increment + 0.5) * increment
                 value = math.clamp(val, min, max)
                 local p = (value - min) / (max - min)
                 fill.Size = UDim2.new(p, 0, 1, 0)
@@ -1602,12 +1614,18 @@ function Library:CreateWindow(config)
                 if Window._destroyed then return end
                 if listening then
                     if input.UserInputType == Enum.UserInputType.Keyboard then
-                        key = input.KeyCode
-                        keyLabel.Text = key.Name
+                        if input.KeyCode == Enum.KeyCode.Delete or input.KeyCode == Enum.KeyCode.Backspace then
+                            -- Unbind the key
+                            key = Enum.KeyCode.Unknown
+                            keyLabel.Text = "None"
+                        else
+                            key = input.KeyCode
+                            keyLabel.Text = key.Name
+                        end
                         listening = false
                         Tween(keyBox:FindFirstChildOfClass("UIStroke"), { Color = Theme.Border }, 0.15)
                     end
-                elseif not processed and input.KeyCode == key then
+                elseif not processed and key ~= Enum.KeyCode.Unknown and input.KeyCode == key then
                     if cfg.Callback then
                         task.spawn(cfg.Callback)
                     end
@@ -1625,7 +1643,7 @@ function Library:CreateWindow(config)
             obj._callback = cfg.Callback
             function obj:Set(newKey)
                 key = newKey
-                keyLabel.Text = key.Name
+                keyLabel.Text = (key == Enum.KeyCode.Unknown) and "None" or key.Name
             end
             function obj:Get()
                 return key
