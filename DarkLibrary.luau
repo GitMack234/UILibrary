@@ -131,59 +131,6 @@ end
 local function Ripple(parent, pos)
     -- subtle highlight flash on click
     local circle = Create("Frame", {
-
--- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Anti-Detection Utilities
--- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-local cloneref = cloneref or function(o) return o end
-
--- Generate randomized Instance names that blend in with Roblox internals
-local _rndChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-local function _randomName(prefix)
-    prefix = prefix or ""
-    local out = {}
-    for i = 1, math.random(8, 14) do
-        local idx = math.random(1, #_rndChars)
-        out[i] = _rndChars:sub(idx, idx)
-    end
-    return prefix .. table.concat(out) .. tostring(math.random(1000, 9999))
-end
-
--- Innocuous Roblox-like names to blend ScreenGuis with engine UIs
-local _innocuousNames = {
-    "RobloxLoadingGUI", "TopBarContainer", "SettingsShield",
-    "BubbleChatContainer", "RbxEventNotification", "PlayerListMaster",
-    "PerformanceStats", "ChatWindowFrame", "NotificationFrame2",
-    "RobloxPromptGui", "RobloxNetworkPause", "InspectGui",
-}
-local function _getInnocuousName()
-    return _innocuousNames[math.random(1, #_innocuousNames)] .. tostring(math.random(1, 99))
-end
-
---- Get a safe, hidden GUI parent. Priority: gethui() > protected CoreGui > PlayerGui
-local function _getSafeGuiParent()
-    if gethui then
-        local ok, container = pcall(gethui)
-        if ok and container then return container end
-    end
-    local ok, core = pcall(function() return cloneref(game:GetService("CoreGui")) end)
-    if ok and core then return core end
-    return Player.PlayerGui
-end
-
---- Protect a ScreenGui from anti-cheat scanning
-local function _protectGui(gui)
-    if sethiddenproperty then
-        pcall(sethiddenproperty, gui, "OnTopOfCoreBlur", true)
-    end
-    if syn and syn.protect_gui then
-        pcall(syn.protect_gui, gui)
-    end
-    if protect_gui then
-        pcall(protect_gui, gui)
-    end
-end
         BackgroundColor3 = Color3.fromRGB(255, 255, 255),
         BackgroundTransparency = 0.85,
         Size = UDim2.fromOffset(0, 0),
@@ -214,35 +161,15 @@ function Library:CreateWindow(config)
     local title = config.Title or "Dark Library"
     local size = config.Size or UDim2.fromOffset(520, 380)
     
-    -- Detect executor environment (safe checks only)
-    local isExecutor = not IsStudio and (gethui ~= nil or identifyexecutor ~= nil)
-
-    -- Use safe hidden GUI parent
-    local guiParent = _getSafeGuiParent()
-    
-    -- Destroy existing (use stored reference instead of FindFirstChild scanning)
-    local _prevLibRef = rawget(shared, "__rs_libgui_ref")
-    if _prevLibRef then
-        pcall(function() _prevLibRef:Destroy() end)
-        rawset(shared, "__rs_libgui_ref", nil)
-    end
-    
-    -- Small random delay to avoid burst-creation detection
-    task.wait(math.random() * 0.2 + 0.05)
+    local guiParent = Player.PlayerGui
     
     local ScreenGui = Create("ScreenGui", {
-        Name = _getInnocuousName(),
+        Name = "RockSideUI",
         ResetOnSpawn = false,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
         Parent = guiParent,
     })
-    
-    -- Store reference for cleanup (avoid FindFirstChild detection)
-    rawset(shared, "__rs_libgui_ref", ScreenGui)
-    
-    -- Protect gui from anti-cheat scanning
-    _protectGui(ScreenGui)
     
     -- UI Scale (auto-detect device and scale accordingly)
     local function GetAutoScale()
@@ -279,7 +206,7 @@ function Library:CreateWindow(config)
     
     -- Main Frame
     local Main = Create("Frame", {
-        Name = _randomName(),
+        Name = "MainFrame",
         BackgroundColor3 = Theme.Background,
         Size = size,
         Position = UDim2.new(0.5, 0, 0.5, 0),
@@ -367,7 +294,7 @@ function Library:CreateWindow(config)
     
     -- ── Title Bar ──
     local TitleBar = Create("Frame", {
-        Name = _randomName(),
+        Name = "TitleBar",
         BackgroundColor3 = Theme.Surface,
         Size = UDim2.new(1, 0, 0, 36),
         ClipsDescendants = true,
@@ -554,7 +481,7 @@ function Library:CreateWindow(config)
     
     -- ── Tab Bar (left sidebar) ──
     local Sidebar = Create("Frame", {
-        Name = _randomName(),
+        Name = "Sidebar",
         BackgroundColor3 = Theme.Surface,
         Size = UDim2.new(0, 130, 1, -37),
         Position = UDim2.fromOffset(0, 37),
@@ -584,7 +511,7 @@ function Library:CreateWindow(config)
     })
     
     local TabHolder = Create("ScrollingFrame", {
-        Name = _randomName(),
+        Name = "TabHolder",
         BackgroundTransparency = 1,
         Size = UDim2.new(1, -2, 1, -8),
         Position = UDim2.fromOffset(0, 4),
@@ -600,7 +527,7 @@ function Library:CreateWindow(config)
     
     -- ── Content Area ──
     local ContentArea = Create("Frame", {
-        Name = _randomName(),
+        Name = "ContentArea",
         BackgroundTransparency = 1,
         Size = UDim2.new(1, -131, 1, -37),
         Position = UDim2.fromOffset(131, 37),
@@ -845,7 +772,7 @@ function Library:CreateWindow(config)
         
         -- Tab button in sidebar
         local TabButton = Create("TextButton", {
-            Name = _randomName(),
+            Name = "TabButton",
             Text = "",
             BackgroundColor3 = Theme.SurfaceAlt,
             BackgroundTransparency = 1,
@@ -881,7 +808,7 @@ function Library:CreateWindow(config)
         
         -- Content page for this tab
         local TabPage = Create("ScrollingFrame", {
-            Name = _randomName(),
+            Name = "TabPage",
             BackgroundTransparency = 1,
             Size = UDim2.new(1, 0, 1, 0),
             CanvasSize = UDim2.fromOffset(0, 0),
@@ -2183,8 +2110,6 @@ function Library:CreateWindow(config)
         end
 
         CleanupAll()
-        -- Clear stored GUI reference
-        rawset(shared, "__rs_libgui_ref", nil)
         -- Destroy any remaining notifications
         pcall(function()
             for _, child in ipairs(notifHolder:GetChildren()) do
