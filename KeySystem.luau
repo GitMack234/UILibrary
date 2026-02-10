@@ -79,6 +79,65 @@ local Theme = {
 }
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- Anti-Detection Utilities
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+local cloneref = cloneref or function(o) return o end
+
+-- Generate randomized Instance names that blend in with Roblox internals
+local _rndChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local function _randomName(prefix)
+    prefix = prefix or ""
+    local out = {}
+    for i = 1, math.random(8, 14) do
+        local idx = math.random(1, #_rndChars)
+        out[i] = _rndChars:sub(idx, idx)
+    end
+    return prefix .. table.concat(out) .. tostring(math.random(1000, 9999))
+end
+
+-- Innocuous Roblox-like names to blend ScreenGuis with engine UIs
+local _innocuousNames = {
+    "RobloxLoadingGUI", "TopBarContainer", "SettingsShield",
+    "BubbleChatContainer", "RbxEventNotification", "PlayerListMaster",
+    "PerformanceStats", "ChatWindowFrame", "NotificationFrame2",
+    "RobloxPromptGui", "RobloxNetworkPause", "InspectGui",
+}
+local function _getInnocuousName()
+    return _innocuousNames[math.random(1, #_innocuousNames)] .. tostring(math.random(1, 99))
+end
+
+--- Get a safe, hidden GUI parent. Priority: gethui() > protected CoreGui > PlayerGui
+local function _getSafeGuiParent()
+    -- gethui() provides a hidden container not scannable by GetChildren/GetDescendants
+    if gethui then
+        local ok, container = pcall(gethui)
+        if ok and container then return container end
+    end
+    -- Fallback: CoreGui with cloneref to avoid reference detection
+    local ok, core = pcall(function() return cloneref(game:GetService("CoreGui")) end)
+    if ok and core then return core end
+    -- Last resort
+    return Player.PlayerGui
+end
+
+--- Protect a ScreenGui from anti-cheat scanning
+local function _protectGui(gui)
+    -- sethiddenproperty makes the GUI invisible to GetChildren/GetDescendants scans
+    if sethiddenproperty then
+        pcall(sethiddenproperty, gui, "OnTopOfCoreBlur", true)
+    end
+    -- Synapse-specific protection
+    if syn and syn.protect_gui then
+        pcall(syn.protect_gui, gui)
+    end
+    -- Fluxus / Script-Ware style protection
+    if protect_gui then
+        pcall(protect_gui, gui)
+    end
+end
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Utilities
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -418,42 +477,36 @@ function KeySystem:Show(config)
         end
     end
 
-    -- ── Detect executor environment (safe checks only) ──
-    local isExecutor = not IsStudio and (gethui ~= nil or identifyexecutor ~= nil)
+    -- ── GUI Parent: use safe hidden parent ──
+    local guiParent = _getSafeGuiParent()
 
-    -- ── GUI Parent: CoreGui when executor detected, PlayerGui otherwise ──
-    local guiParent
-    if isExecutor then
-        if gethui then
-            guiParent = gethui()
-        else
-            local ok, core = pcall(game.GetService, game, "CoreGui")
-            guiParent = (ok and core) or Player.PlayerGui
-        end
-    else
-        guiParent = Player.PlayerGui
+    -- Destroy existing (use stored reference instead of FindFirstChild to avoid scanning)
+    local _prevGuiRef = rawget(shared, "__rs_keygui_ref")
+    if _prevGuiRef then
+        pcall(function() _prevGuiRef:Destroy() end)
+        rawset(shared, "__rs_keygui_ref", nil)
     end
 
-    -- Destroy existing
-    local existing = guiParent:FindFirstChild("DarkKeySystem")
-    if existing then existing:Destroy() end
+    -- Small random delay before creating UI to avoid burst-creation detection
+    task.wait(math.random() * 0.3 + 0.1)
 
     local ScreenGui = Create("ScreenGui", {
-        Name = "DarkKeySystem",
+        Name = _getInnocuousName(),
         ResetOnSpawn = false,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
         Parent = guiParent,
     })
 
-    -- Protect gui in executor environments
-    if isExecutor and syn and syn.protect_gui then
-        syn.protect_gui(ScreenGui)
-    end
+    -- Store reference for cleanup (avoid FindFirstChild detection)
+    rawset(shared, "__rs_keygui_ref", ScreenGui)
+
+    -- Protect gui from anti-cheat scanning
+    _protectGui(ScreenGui)
 
     -- ── Notification System ──
     local notifHolder = Create("Frame", {
-        Name = "NotifHolder",
+        Name = _randomName(),
         BackgroundTransparency = 1,
         Size = UDim2.new(0, 260, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -586,7 +639,7 @@ function KeySystem:Show(config)
 
     -- ── Background Overlay ──
     local Overlay = Create("Frame", {
-        Name = "Overlay",
+        Name = _randomName(),
         BackgroundColor3 = Color3.fromRGB(0, 0, 0),
         BackgroundTransparency = 1,
         Size = UDim2.new(1, 0, 1, 0),
@@ -597,7 +650,7 @@ function KeySystem:Show(config)
 
     -- ── Main Panel ──
     local Panel = Create("Frame", {
-        Name = "Panel",
+        Name = _randomName(),
         BackgroundColor3 = Theme.Background,
         Size = UDim2.fromOffset(panelWidth, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
@@ -620,7 +673,7 @@ function KeySystem:Show(config)
 
     -- ── Header Section ──
     local Header = Create("Frame", {
-        Name = "Header",
+        Name = _randomName(),
         BackgroundColor3 = Theme.Surface,
         Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y,
