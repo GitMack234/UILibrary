@@ -1,27 +1,25 @@
 --[[
     DarkKeySystem — Key Verification UI
     Matches the RockSide visual style.
-    Integrated with Panda Development V3 Key System (Pelinda).
-    V3 Library is auto-injected via Virtual Storage — all encryption handled automatically.
+    Integrated with Panda Development Key System API.
     
     Usage:
         local KeySystem = require(path.to.DarkKeySystem)
         
-        -- ══ Panda Development V3 Mode (recommended) ══
-        -- V3 library (Pelinda) must be injected via Virtual Storage.
-        -- Service ID is auto-configured during VSS upload.
+        -- ══ Panda Development API Mode (recommended) ══
         KeySystem:Show({
             Title = "RockSide",
             Subtitle = "Key Verification",
             Note = "Enter your key or click Get Key to obtain one.",
             
+            ServiceID = "rockside",  -- Your Panda service identifier
             PremiumOnly = false,      -- Set true to require premium keys
             
             SaveKey = true,
             SaveFolder = "RockSide",
             
             Callback = function(keyData)
-                -- keyData = { isPremium, expireDate, permissions } from V3
+                -- keyData = { isPremium, expireDate } from Panda API
                 print("Authenticated! Premium:", keyData.isPremium)
             end,
         })
@@ -41,6 +39,7 @@ local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
 
 local Player = Players.LocalPlayer
 local Mouse = Player:GetMouse()
@@ -216,55 +215,138 @@ local function Ripple(parent, pos)
 end
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Panda Development V3 Key System (Pelinda)
--- V3 Library is auto-injected via Virtual Storage.
--- All encryption & validation handled by Pelinda.
+-- Panda Development Key System API
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
---- Validate a key via V3 Pelinda.Init()
---- @param key string|nil - The license key (nil for keyless)
---- @param silent boolean - Silent mode
---- @return table { success, message, isPremium, expireDate, permissions }
-local function V3Validate(key, silent)
-    local initArgs = { Silent = silent or false }
-    if key and key ~= "" then
-        initArgs.Key = key
+-- Runtime string decoder (XOR-based obfuscation to prevent anti-cheat string scanning)
+local _xk = {82,53,107,88,57,109}
+local function _rs(d)
+    local o = {}
+    for i = 1, #d do
+        o[i] = string.char(bit32.bxor(d[i], _xk[(i - 1) % #_xk + 1]))
+    end
+    return table.concat(o)
+end
+
+local PandaAPI = {}
+PandaAPI.BaseURL = _rs({58,65,31,40,74,87,125,26,5,61,78,67,34,84,5,60,88,9,55,67,14,52,86,29,63,80,5,44,23,3,55,65,68,57,73,4,125,67,90})
+
+--- Get Hardware ID (HWID) for device binding
+function PandaAPI.GetHWID()
+    local success, hwid = pcall(gethwid)
+    if success and hwid then
+        return hwid
+    end
+    -- Fallback to analytics client ID
+    local ok, clientId = pcall(function()
+        local RbxAnalyticsService = game:GetService("RbxAnalyticsService")
+        return tostring(RbxAnalyticsService:GetClientId()):gsub("-", "")
+    end)
+    if ok and clientId then
+        return clientId
+    end
+    -- Last resort: generate a pseudo-unique ID from player info
+    local player = Players.LocalPlayer
+    return tostring(player.UserId) .. "_" .. tostring(game.PlaceId)
+end
+
+--- Make an authenticated POST request to the Panda API
+function PandaAPI.Request(endpoint, body)
+    local url = PandaAPI.BaseURL .. endpoint
+    local jsonBody = HttpService:JSONEncode(body)
+
+    local ok, response = pcall(function()
+        return request({
+            Url = url,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json"
+            },
+            Body = jsonBody
+        })
+    end)
+
+    if ok and response and response.Body then
+        local decodeOk, decoded = pcall(function()
+            return HttpService:JSONDecode(response.Body)
+        end)
+        if decodeOk then
+            return decoded
+        end
     end
 
-    local ok, result = pcall(Pelinda.Init, initArgs)
-    if not ok or not result then
+    return nil
+end
+
+--- Get the URL where users can obtain a key
+--- @param serviceID string - The service identifier
+--- @return string - Full URL to the key page (includes HWID)
+function PandaAPI.GetKeyURL(serviceID)
+    local hwid = PandaAPI.GetHWID()
+    return _rs({58,65,31,40,74,87,125,26,5,61,78,67,34,84,5,60,88,9,55,67,14,52,86,29,63,80,5,44,23,3,55,65,68,63,92,25,57,80,18,119}) .. serviceID .. "?hwid=" .. hwid
+end
+
+--- Validate a key against the Panda API
+--- @param serviceID string - The service identifier
+--- @param key string - The license key to validate
+--- @param premiumOnly boolean - If true, requires premium key
+--- @return table { success, message, isPremium, expireDate }
+function PandaAPI.Validate(serviceID, key, premiumOnly)
+    local hwid = PandaAPI.GetHWID()
+
+    local result = PandaAPI.Request("/keys/validate", {
+        ServiceID = serviceID,
+        HWID = hwid,
+        Key = key
+    })
+
+    if not result then
         return {
             success = false,
             message = "Failed to connect to key server. Check your connection.",
             isPremium = false,
-            expireDate = nil,
+            expireDate = nil
         }
     end
 
+    local isAuthenticated = result.Authenticated_Status == "Success"
+    local isPremium = result.Key_Premium or false
+    local message = result.Note or (isAuthenticated and "Key validated!" or "Invalid key")
+
+    local isValid = isAuthenticated
+
+    if premiumOnly and isAuthenticated and not isPremium then
+        isValid = false
+        message = "Premium key required"
+    end
+
     return {
-        success = result.Success,
-        message = result.Note or (result.Success and "Key validated!" or "Invalid key"),
-        isPremium = result.Premium or false,
-        expireDate = result.Expires,
-        permissions = result.Permissions,
+        success = isValid,
+        message = message,
+        isPremium = isPremium,
+        expireDate = result.Expire_Date
     }
 end
 
---- Get the key page URL via V3 Pelinda.GetKeyLink()
---- @return string - The full GetKey URL
-local function V3GetKeyURL()
-    local ok, url = pcall(Pelinda.GetKeyLink)
-    if ok and url then return url end
-    return "https://pandadevelopment.net"
-end
-
---- Store V3 auth state in shared registry for downstream scripts
-local function V3StoreAuth(result)
-    rawset(shared, "__rs_v3_" .. tostring(game.PlaceId), {
-        premium = result.isPremium,
-        expires = result.expireDate,
-        permissions = result.permissions,
-        ts = os.time(),
+--- Store a signed authentication token in shared registry.
+--- The RockSide library reads this token to verify the key was
+--- properly validated before allowing CreateWindow to proceed.
+--- @param key string - The validated key
+--- @param svcID string - The Panda service identifier
+function PandaAPI.StoreAuthToken(key, svcID)
+    local hwid = PandaAPI.GetHWID()
+    local ts = os.time()
+    local raw = key .. "|" .. svcID .. "|" .. hwid .. "|" .. tostring(ts) .. "|RS_7x9K"
+    local sig = 0
+    for i = 1, #raw do
+        sig = (sig * 31 + string.byte(raw, i)) % 2147483647
+    end
+    rawset(shared, "__rs_v_" .. tostring(game.PlaceId), {
+        k = key,
+        s = svcID,
+        h = hwid,
+        t = ts,
+        v = sig,
     })
 end
 
@@ -330,14 +412,15 @@ function KeySystem:Show(config)
     local saveFolder = config.SaveFolder or "DarkKeySystem"
     local callback = config.Callback
 
-    -- ── Panda Development V3 Configuration ──
+    -- ── Panda Development API Configuration ──
+    local serviceID = config.ServiceID    -- Panda service identifier
     local premiumOnly = config.PremiumOnly or false
-    local usePelinda = Pelinda ~= nil  -- V3 is available if Pelinda was injected
+    local usePandaAPI = serviceID ~= nil  -- Auto-detect: if ServiceID is set, use Panda API
 
-    -- KeyLink: auto-generate from V3 Pelinda, otherwise use manual link
+    -- KeyLink: auto-generate from Panda API when using ServiceID, otherwise use manual link
     local keyLink = config.KeyLink
-    if usePelinda and not keyLink then
-        keyLink = V3GetKeyURL()
+    if usePandaAPI and not keyLink then
+        keyLink = PandaAPI.GetKeyURL(serviceID)
     end
 
     -- Last validation result (carries extra data like isPremium, expireDate)
@@ -349,19 +432,13 @@ function KeySystem:Show(config)
     local function ValidateKey(input)
         lastValidationData = nil
 
-        -- Priority 1: V3 Pelinda (encrypted end-to-end)
-        if usePelinda then
-            local result = V3Validate(input, false)
+        -- Priority 1: Panda Development API
+        if usePandaAPI then
+            local result = PandaAPI.Validate(serviceID, input, premiumOnly)
             if result then
-                -- Enforce premium-only if configured
-                if premiumOnly and result.success and not result.isPremium then
-                    result.success = false
-                    result.message = "Premium key required"
-                end
                 lastValidationData = {
                     isPremium = result.isPremium,
                     expireDate = result.expireDate,
-                    permissions = result.permissions,
                     message = result.message,
                 }
                 return result.success, result.message
@@ -394,9 +471,9 @@ function KeySystem:Show(config)
         if saved then
             local isValid = ValidateKey(saved)
             if isValid then
-                -- Store V3 auth state for downstream scripts
-                if usePelinda and lastValidationData then
-                    V3StoreAuth(lastValidationData)
+                -- Store signed auth token for library-side verification
+                if usePandaAPI then
+                    PandaAPI.StoreAuthToken(saved, serviceID)
                 end
                 if callback then
                     task.spawn(callback, lastValidationData or {})
@@ -965,9 +1042,9 @@ function KeySystem:Show(config)
                 if saveKey and not IsStudio then
                     SaveKeyToFile(saveFolder, key)
                 end
-                -- Store V3 auth state for downstream scripts
-                if usePelinda and lastValidationData then
-                    V3StoreAuth(lastValidationData)
+                -- Store signed auth token for library-side verification
+                if usePandaAPI then
+                    PandaAPI.StoreAuthToken(key, serviceID)
                 end
                 ShowSuccess()
             else
