@@ -260,6 +260,28 @@ function PandaAPI.Validate(serviceID, key, premiumOnly)
     }
 end
 
+--- Store a signed authentication token in shared registry.
+--- The RockSide library reads this token to verify the key was
+--- properly validated before allowing CreateWindow to proceed.
+--- @param key string - The validated key
+--- @param svcID string - The Panda service identifier
+function PandaAPI.StoreAuthToken(key, svcID)
+    local hwid = PandaAPI.GetHWID()
+    local ts = os.time()
+    local raw = key .. "|" .. svcID .. "|" .. hwid .. "|" .. tostring(ts) .. "|RS_7x9K"
+    local sig = 0
+    for i = 1, #raw do
+        sig = (sig * 31 + string.byte(raw, i)) % 2147483647
+    end
+    rawset(shared, "__rs_v_" .. tostring(game.PlaceId), {
+        k = key,
+        s = svcID,
+        h = hwid,
+        t = ts,
+        v = sig,
+    })
+end
+
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Key System
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -381,6 +403,10 @@ function KeySystem:Show(config)
         if saved then
             local isValid = ValidateKey(saved)
             if isValid then
+                -- Store signed auth token for library-side verification
+                if usePandaAPI then
+                    PandaAPI.StoreAuthToken(saved, serviceID)
+                end
                 if callback then
                     task.spawn(callback, lastValidationData or {})
                 end
@@ -951,6 +977,10 @@ function KeySystem:Show(config)
                 -- Save key if enabled
                 if saveKey and not IsStudio then
                     SaveKeyToFile(saveFolder, key)
+                end
+                -- Store signed auth token for library-side verification
+                if usePandaAPI then
+                    PandaAPI.StoreAuthToken(key, serviceID)
                 end
                 ShowSuccess()
             else
