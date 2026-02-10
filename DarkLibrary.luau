@@ -1,5 +1,5 @@
 --[[
-    DarkLibrary — Modern Dark Theme UI Library
+    RockSide — Modern Dark Theme UI Library
     A sleek, minimal exploit UI library.
     No ImageLabels. No shadows. Pure dark elegance.
     
@@ -131,6 +131,59 @@ end
 local function Ripple(parent, pos)
     -- subtle highlight flash on click
     local circle = Create("Frame", {
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- Anti-Detection Utilities
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+local cloneref = cloneref or function(o) return o end
+
+-- Generate randomized Instance names that blend in with Roblox internals
+local _rndChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+local function _randomName(prefix)
+    prefix = prefix or ""
+    local out = {}
+    for i = 1, math.random(8, 14) do
+        local idx = math.random(1, #_rndChars)
+        out[i] = _rndChars:sub(idx, idx)
+    end
+    return prefix .. table.concat(out) .. tostring(math.random(1000, 9999))
+end
+
+-- Innocuous Roblox-like names to blend ScreenGuis with engine UIs
+local _innocuousNames = {
+    "RobloxLoadingGUI", "TopBarContainer", "SettingsShield",
+    "BubbleChatContainer", "RbxEventNotification", "PlayerListMaster",
+    "PerformanceStats", "ChatWindowFrame", "NotificationFrame2",
+    "RobloxPromptGui", "RobloxNetworkPause", "InspectGui",
+}
+local function _getInnocuousName()
+    return _innocuousNames[math.random(1, #_innocuousNames)] .. tostring(math.random(1, 99))
+end
+
+--- Get a safe, hidden GUI parent. Priority: gethui() > protected CoreGui > PlayerGui
+local function _getSafeGuiParent()
+    if gethui then
+        local ok, container = pcall(gethui)
+        if ok and container then return container end
+    end
+    local ok, core = pcall(function() return cloneref(game:GetService("CoreGui")) end)
+    if ok and core then return core end
+    return Player.PlayerGui
+end
+
+--- Protect a ScreenGui from anti-cheat scanning
+local function _protectGui(gui)
+    if sethiddenproperty then
+        pcall(sethiddenproperty, gui, "OnTopOfCoreBlur", true)
+    end
+    if syn and syn.protect_gui then
+        pcall(syn.protect_gui, gui)
+    end
+    if protect_gui then
+        pcall(protect_gui, gui)
+    end
+end
         BackgroundColor3 = Color3.fromRGB(255, 255, 255),
         BackgroundTransparency = 0.85,
         Size = UDim2.fromOffset(0, 0),
@@ -149,6 +202,77 @@ local function Ripple(parent, pos)
 end
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+-- Security: Key Verification Gate
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+--- Internal HWID getter (mirrors KeySystem implementation)
+local function _getDeviceID()
+    local s, h = pcall(gethwid)
+    if s and h then return h end
+    local ok, cid = pcall(function()
+        local svc = game:GetService("RbxAnalyticsService")
+        return tostring(svc:GetClientId()):gsub("-", "")
+    end)
+    if ok and cid then return cid end
+    return tostring(Player.UserId) .. "_" .. tostring(game.PlaceId)
+end
+
+--- Verify the signed auth token stored by the KeySystem.
+--- Returns: (boolean ok, table|nil authData)
+local function _verifyAuth()
+    local authKey = "__rs_v_" .. tostring(game.PlaceId)
+    local auth = rawget(shared, authKey)
+    if not auth or type(auth) ~= "table" then return false, nil end
+    if not (auth.k and auth.s and auth.h and auth.t and auth.v) then return false, nil end
+
+    -- HWID must match the current device
+    if auth.h ~= _getDeviceID() then return false, nil end
+
+    -- Recompute signature and compare
+    local raw = auth.k .. "|" .. auth.s .. "|" .. auth.h .. "|" .. tostring(auth.t) .. "|RS_7x9K"
+    local sig = 0
+    for i = 1, #raw do
+        sig = (sig * 31 + string.byte(raw, i)) % 2147483647
+    end
+    if auth.v ~= sig then return false, nil end
+
+    return true, auth
+end
+
+--- Server-side key re-validation against Panda Development API
+local function _serverValidate(key, serviceID, hwid)
+    local ok, response = pcall(function()
+        return request({
+            Url = "https://new.pandadevelopment.net/api/v1/keys/validate",
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode({
+                ServiceID = serviceID,
+                HWID = hwid,
+                Key = key,
+            }),
+        })
+    end)
+    if ok and response and response.Body then
+        local dok, decoded = pcall(function()
+            return HttpService:JSONDecode(response.Body)
+        end)
+        if dok and decoded then
+            return decoded.Authenticated_Status == "Success"
+        end
+    end
+    return false
+end
+
+--- Kick the local player with a reason message
+local function _securityKick(reason)
+    local lp = Players.LocalPlayer
+    if lp then
+        lp:Kick(reason or "Key verification failed. Please restart with a valid key.")
+    end
+end
+
+-- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Library
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -157,43 +281,59 @@ Library.__index = Library
 
 function Library:CreateWindow(config)
     config = config or {}
+
+    -- ── Security Gate: block execution unless a valid key was verified ──
+    if not IsStudio then
+        local authOk, authData = _verifyAuth()
+        if not authOk then
+            task.delay(0.5, function()
+                _securityKick("Key verification failed. Please use the key system to launch RockSide.")
+            end)
+            return nil
+        end
+
+        -- Authoritative server-side re-validation (async so UI isn't blocked)
+        task.spawn(function()
+            task.wait(math.random(2, 5)) -- small random delay to look like normal traffic
+            local valid = _serverValidate(authData.k, authData.s, authData.h)
+            if not valid then
+                _securityKick("Key validation failed. Your key may be invalid or expired.")
+            end
+        end)
+    end
+
     local title = config.Title or "Dark Library"
     local size = config.Size or UDim2.fromOffset(520, 380)
     
     -- Detect executor environment (safe checks only)
     local isExecutor = not IsStudio and (gethui ~= nil or identifyexecutor ~= nil)
 
-    -- Determine parent: CoreGui when executor detected, PlayerGui otherwise
-    local guiParent
-    if isExecutor then
-        if gethui then
-            guiParent = gethui()
-        else
-            local ok, core = pcall(game.GetService, game, "CoreGui")
-            guiParent = (ok and core) or Player.PlayerGui
-        end
-    else
-        guiParent = Player.PlayerGui
+    -- Use safe hidden GUI parent
+    local guiParent = _getSafeGuiParent()
+    
+    -- Destroy existing (use stored reference instead of FindFirstChild scanning)
+    local _prevLibRef = rawget(shared, "__rs_libgui_ref")
+    if _prevLibRef then
+        pcall(function() _prevLibRef:Destroy() end)
+        rawset(shared, "__rs_libgui_ref", nil)
     end
     
-    -- Destroy existing
-    local existing = guiParent:FindFirstChild("DarkLibrary")
-    if existing then existing:Destroy() end
+    -- Small random delay to avoid burst-creation detection
+    task.wait(math.random() * 0.2 + 0.05)
     
     local ScreenGui = Create("ScreenGui", {
-        Name = "DarkLibrary",
+        Name = _getInnocuousName(),
         ResetOnSpawn = false,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets,
         Parent = guiParent,
     })
     
-    -- Protect gui in executor environments
-    if isExecutor then
-        if syn and syn.protect_gui then
-            syn.protect_gui(ScreenGui)
-        end
-    end
+    -- Store reference for cleanup (avoid FindFirstChild detection)
+    rawset(shared, "__rs_libgui_ref", ScreenGui)
+    
+    -- Protect gui from anti-cheat scanning
+    _protectGui(ScreenGui)
     
     -- UI Scale (auto-detect device and scale accordingly)
     local function GetAutoScale()
@@ -230,7 +370,7 @@ function Library:CreateWindow(config)
     
     -- Main Frame
     local Main = Create("Frame", {
-        Name = "Main",
+        Name = _randomName(),
         BackgroundColor3 = Theme.Background,
         Size = size,
         Position = UDim2.new(0.5, 0, 0.5, 0),
@@ -252,7 +392,7 @@ function Library:CreateWindow(config)
     Window._flags = {}
     Window._pickers = {}
     Window._configName = config.ConfigName or "default"
-    Window._configFolder = config.ConfigFolder or "DarkLibrary"
+    Window._configFolder = config.ConfigFolder or "RockSide"
     Window._onCloseCallbacks = {}
 
     --- Track a connection for cleanup on destroy
@@ -318,7 +458,7 @@ function Library:CreateWindow(config)
     
     -- ── Title Bar ──
     local TitleBar = Create("Frame", {
-        Name = "TitleBar",
+        Name = _randomName(),
         BackgroundColor3 = Theme.Surface,
         Size = UDim2.new(1, 0, 0, 36),
         ClipsDescendants = true,
@@ -505,7 +645,7 @@ function Library:CreateWindow(config)
     
     -- ── Tab Bar (left sidebar) ──
     local Sidebar = Create("Frame", {
-        Name = "Sidebar",
+        Name = _randomName(),
         BackgroundColor3 = Theme.Surface,
         Size = UDim2.new(0, 130, 1, -37),
         Position = UDim2.fromOffset(0, 37),
@@ -535,7 +675,7 @@ function Library:CreateWindow(config)
     })
     
     local TabHolder = Create("ScrollingFrame", {
-        Name = "TabHolder",
+        Name = _randomName(),
         BackgroundTransparency = 1,
         Size = UDim2.new(1, -2, 1, -8),
         Position = UDim2.fromOffset(0, 4),
@@ -551,7 +691,7 @@ function Library:CreateWindow(config)
     
     -- ── Content Area ──
     local ContentArea = Create("Frame", {
-        Name = "ContentArea",
+        Name = _randomName(),
         BackgroundTransparency = 1,
         Size = UDim2.new(1, -131, 1, -37),
         Position = UDim2.fromOffset(131, 37),
@@ -658,11 +798,11 @@ function Library:CreateWindow(config)
     --- Save config to file (exploit executors only)
     function Window:SaveConfig(name)
         if IsStudio then
-            warn("[DarkLibrary] Config saving is not available in Studio")
+            warn("[RockSide] Config saving is not available in Studio")
             return false
         end
         if not pcall(function() return writefile and readfile and isfile and isfolder and makefolder end) then
-            warn("[DarkLibrary] File system functions are not available in this environment")
+            warn("[RockSide] File system functions are not available in this environment")
             self:Notify({ Title = "Config Error", Content = "File system not available in this environment.", Duration = 4 })
             return false
         end
@@ -681,7 +821,7 @@ function Library:CreateWindow(config)
         if success then
             self:Notify({ Title = "Config Saved", Content = 'Saved as "' .. name .. '"', Duration = 3 })
         else
-            warn("[DarkLibrary] Failed to save config:", err)
+            warn("[RockSide] Failed to save config:", err)
             self:Notify({ Title = "Save Failed", Content = tostring(err), Duration = 4 })
         end
         return success
@@ -690,11 +830,11 @@ function Library:CreateWindow(config)
     --- Load config from file (exploit executors only)
     function Window:LoadConfig(name)
         if IsStudio then
-            warn("[DarkLibrary] Config loading is not available in Studio")
+            warn("[RockSide] Config loading is not available in Studio")
             return false
         end
         if not pcall(function() return readfile and isfile and isfolder end) then
-            warn("[DarkLibrary] File system functions are not available in this environment")
+            warn("[RockSide] File system functions are not available in this environment")
             self:Notify({ Title = "Config Error", Content = "File system not available in this environment.", Duration = 4 })
             return false
         end
@@ -739,7 +879,7 @@ function Library:CreateWindow(config)
         if success then
             self:Notify({ Title = "Config Loaded", Content = 'Loaded "' .. name .. '"', Duration = 3 })
         else
-            warn("[DarkLibrary] Failed to load config:", err)
+            warn("[RockSide] Failed to load config:", err)
             self:Notify({ Title = "Load Failed", Content = tostring(err), Duration = 4 })
         end
         return success
@@ -767,7 +907,7 @@ function Library:CreateWindow(config)
     function Window:DeleteConfig(name)
         if IsStudio then return false end
         if not pcall(function() return isfile and delfile end) then
-            warn("[DarkLibrary] File system functions are not available in this environment")
+            warn("[RockSide] File system functions are not available in this environment")
             self:Notify({ Title = "Config Error", Content = "File system not available in this environment.", Duration = 4 })
             return false
         end
@@ -782,7 +922,7 @@ function Library:CreateWindow(config)
             end
         end)
         if not success then
-            warn("[DarkLibrary] Failed to delete config:", err)
+            warn("[RockSide] Failed to delete config:", err)
             self:Notify({ Title = "Delete Failed", Content = tostring(err), Duration = 4 })
         end
         return success
@@ -796,7 +936,7 @@ function Library:CreateWindow(config)
         
         -- Tab button in sidebar
         local TabButton = Create("TextButton", {
-            Name = tabTitle,
+            Name = _randomName(),
             Text = "",
             BackgroundColor3 = Theme.SurfaceAlt,
             BackgroundTransparency = 1,
@@ -832,7 +972,7 @@ function Library:CreateWindow(config)
         
         -- Content page for this tab
         local TabPage = Create("ScrollingFrame", {
-            Name = tabTitle .. "_Page",
+            Name = _randomName(),
             BackgroundTransparency = 1,
             Size = UDim2.new(1, 0, 1, 0),
             CanvasSize = UDim2.fromOffset(0, 0),
@@ -2134,6 +2274,8 @@ function Library:CreateWindow(config)
         end
 
         CleanupAll()
+        -- Clear stored GUI reference
+        rawset(shared, "__rs_libgui_ref", nil)
         -- Destroy any remaining notifications
         pcall(function()
             for _, child in ipairs(notifHolder:GetChildren()) do
@@ -2143,6 +2285,34 @@ function Library:CreateWindow(config)
             end
         end)
         ScreenGui:Destroy()
+    end
+
+    -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    -- Periodic Key Re-validation
+    -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+    if not IsStudio then
+        task.spawn(function()
+            while true do
+                -- Random interval (75-120s) to prevent pattern detection
+                task.wait(math.random(75, 120))
+                if Window._destroyed then break end
+
+                -- Verify auth token integrity
+                local authOk, authData = _verifyAuth()
+                if not authOk then
+                    _securityKick("Session expired. Please restart with a valid key.")
+                    break
+                end
+
+                -- Server-side re-check (authoritative)
+                local valid = _serverValidate(authData.k, authData.s, authData.h)
+                if not valid then
+                    _securityKick("Key revoked or expired. Please obtain a new key.")
+                    break
+                end
+            end
+        end)
     end
     
     return Window
