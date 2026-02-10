@@ -32,7 +32,6 @@ local RunService = game:GetService("RunService")
 
 local Player = Players.LocalPlayer
 local Mouse = Player:GetMouse()
-local HttpService = game:GetService("HttpService")
 local IsStudio = RunService:IsStudio()
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -202,66 +201,22 @@ end
 end
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Security: Key Verification Gate
+-- Security: V3 Auth State Check
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
---- Internal HWID getter (mirrors KeySystem implementation)
-local function _getDeviceID()
-    local s, h = pcall(gethwid)
-    if s and h then return h end
-    local ok, cid = pcall(function()
-        local svc = game:GetService("RbxAnalyticsService")
-        return tostring(svc:GetClientId()):gsub("-", "")
-    end)
-    if ok and cid then return cid end
-    return tostring(Player.UserId) .. "_" .. tostring(game.PlaceId)
-end
-
---- Verify the signed auth token stored by the KeySystem.
+--- Verify the V3 auth state stored by Key.client after Pelinda.Init()
 --- Returns: (boolean ok, table|nil authData)
-local function _verifyAuth()
-    local authKey = "__rs_v_" .. tostring(game.PlaceId)
+local function _verifyV3Auth()
+    local authKey = "__rs_v3_" .. tostring(game.PlaceId)
     local auth = rawget(shared, authKey)
-    if not auth or type(auth) ~= "table" then return false, nil end
-    if not (auth.k and auth.s and auth.h and auth.t and auth.v) then return false, nil end
-
-    -- HWID must match the current device
-    if auth.h ~= _getDeviceID() then return false, nil end
-
-    -- Recompute signature and compare
-    local raw = auth.k .. "|" .. auth.s .. "|" .. auth.h .. "|" .. tostring(auth.t) .. "|RS_7x9K"
-    local sig = 0
-    for i = 1, #raw do
-        sig = (sig * 31 + string.byte(raw, i)) % 2147483647
+    if not auth or type(auth) ~= "table" or not auth.ts then
+        return false, nil
     end
-    if auth.v ~= sig then return false, nil end
-
+    -- Reject sessions older than 10 minutes
+    if os.time() - (auth.ts or 0) > 600 then
+        return false, nil
+    end
     return true, auth
-end
-
---- Server-side key re-validation against Panda Development API
-local function _serverValidate(key, serviceID, hwid)
-    local ok, response = pcall(function()
-        return request({
-            Url = "https://new.pandadevelopment.net/api/v1/keys/validate",
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = HttpService:JSONEncode({
-                ServiceID = serviceID,
-                HWID = hwid,
-                Key = key,
-            }),
-        })
-    end)
-    if ok and response and response.Body then
-        local dok, decoded = pcall(function()
-            return HttpService:JSONDecode(response.Body)
-        end)
-        if dok and decoded then
-            return decoded.Authenticated_Status == "Success"
-        end
-    end
-    return false
 end
 
 --- Kick the local player with a reason message
@@ -282,24 +237,15 @@ Library.__index = Library
 function Library:CreateWindow(config)
     config = config or {}
 
-    -- ── Security Gate: block execution unless a valid key was verified ──
+    -- ── Security Gate: block execution unless V3 auth was verified ──
     if not IsStudio then
-        local authOk, authData = _verifyAuth()
+        local authOk, authData = _verifyV3Auth()
         if not authOk then
             task.delay(0.5, function()
                 _securityKick("Key verification failed. Please use the key system to launch RockSide.")
             end)
             return nil
         end
-
-        -- Authoritative server-side re-validation (async so UI isn't blocked)
-        task.spawn(function()
-            task.wait(math.random(2, 5)) -- small random delay to look like normal traffic
-            local valid = _serverValidate(authData.k, authData.s, authData.h)
-            if not valid then
-                _securityKick("Key validation failed. Your key may be invalid or expired.")
-            end
-        end)
     end
 
     local title = config.Title or "Dark Library"
@@ -2288,7 +2234,7 @@ function Library:CreateWindow(config)
     end
 
     -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    -- Periodic Key Re-validation
+    -- Periodic V3 Auth State Check
     -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
     if not IsStudio then
@@ -2298,17 +2244,10 @@ function Library:CreateWindow(config)
                 task.wait(math.random(75, 120))
                 if Window._destroyed then break end
 
-                -- Verify auth token integrity
-                local authOk, authData = _verifyAuth()
+                -- Verify V3 auth state is still valid
+                local authOk = _verifyV3Auth()
                 if not authOk then
                     _securityKick("Session expired. Please restart with a valid key.")
-                    break
-                end
-
-                -- Server-side re-check (authoritative)
-                local valid = _serverValidate(authData.k, authData.s, authData.h)
-                if not valid then
-                    _securityKick("Key revoked or expired. Please obtain a new key.")
                     break
                 end
             end
