@@ -202,102 +202,6 @@ end
 end
 
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
--- Security: Key Verification Gate
--- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
---- Internal HWID getter (mirrors KeySystem implementation)
-local function _getDeviceID()
-    local s, h = pcall(gethwid)
-    if s and h then return h end
-    local ok, cid = pcall(function()
-        local svc = game:GetService("RbxAnalyticsService")
-        return tostring(svc:GetClientId()):gsub("-", "")
-    end)
-    if ok and cid then return cid end
-    return tostring(Player.UserId) .. "_" .. tostring(game.PlaceId)
-end
-
---- Verify the signed auth token stored by the KeySystem.
---- Returns: (boolean ok, table|nil authData)
-local function _verifyAuth()
-    local authKey = "__rs_v_" .. tostring(game.PlaceId)
-    local auth = rawget(shared, authKey)
-    if not auth or type(auth) ~= "table" then return false, nil end
-    if not (auth.k and auth.s and auth.h and auth.t and auth.v) then return false, nil end
-
-    -- HWID must match the current device
-    if auth.h ~= _getDeviceID() then return false, nil end
-
-    -- Recompute signature and compare
-    local raw = auth.k .. "|" .. auth.s .. "|" .. auth.h .. "|" .. tostring(auth.t) .. "|RS_7x9K"
-    local sig = 0
-    for i = 1, #raw do
-        sig = (sig * 31 + string.byte(raw, i)) % 2147483647
-    end
-    if auth.v ~= sig then return false, nil end
-
-    return true, auth
-end
-
--- Runtime string decoder (XOR-based obfuscation to prevent anti-cheat string scanning)
-local _xk = {82,53,107,88,57,109}
-local function _rs(d)
-    local o = {}
-    for i = 1, #d do
-        o[i] = string.char(bit32.bxor(d[i], _xk[(i - 1) % #_xk + 1]))
-    end
-    return table.concat(o)
-end
-
--- Anti-hook safe request wrapper
-local _safeReq
-do
-    local _origReq = (clonefunction or function(f) return f end)(request)
-    local _wrapClosure = newcclosure or function(f) return f end
-    _safeReq = _wrapClosure(function(opts)
-        local res
-        local co = coroutine.wrap(function()
-            res = _origReq(opts)
-        end)
-        co()
-        return res
-    end)
-end
-
---- Server-side key re-validation against Panda Development API
-local function _serverValidate(key, serviceID, hwid)
-    local ok, response = pcall(function()
-        return _safeReq({
-            Url = _rs({58,65,31,40,74,87,125,26,5,61,78,67,34,84,5,60,88,9,55,67,14,52,86,29,63,80,5,44,23,3,55,65,68,57,73,4,125,67,90,119,82,8,43,70,68,46,88,1,59,81,10,44,92}),
-            Method = "POST",
-            Headers = { ["Content-Type"] = "application/json" },
-            Body = HttpService:JSONEncode({
-                ServiceID = serviceID,
-                HWID = hwid,
-                Key = key,
-            }),
-        })
-    end)
-    if ok and response and response.Body then
-        local dok, decoded = pcall(function()
-            return HttpService:JSONDecode(response.Body)
-        end)
-        if dok and decoded then
-            return decoded.Authenticated_Status == "Success"
-        end
-    end
-    return false
-end
-
---- Kick the local player with a reason message
-local function _securityKick(reason)
-    local lp = Players.LocalPlayer
-    if lp then
-        lp:Kick(reason or "Key verification failed. Please restart with a valid key.")
-    end
-end
-
--- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- Library
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -306,26 +210,6 @@ Library.__index = Library
 
 function Library:CreateWindow(config)
     config = config or {}
-
-    -- ── Security Gate: block execution unless a valid key was verified ──
-    if not IsStudio then
-        local authOk, authData = _verifyAuth()
-        if not authOk then
-            task.delay(0.5, function()
-                _securityKick("Key verification failed. Please use the key system to launch RockSide.")
-            end)
-            return nil
-        end
-
-        -- Authoritative server-side re-validation (async so UI isn't blocked)
-        task.spawn(function()
-            task.wait(math.random(2, 5)) -- small random delay to look like normal traffic
-            local valid = _serverValidate(authData.k, authData.s, authData.h)
-            if not valid then
-                _securityKick("Key validation failed. Your key may be invalid or expired.")
-            end
-        end)
-    end
 
     local title = config.Title or "Dark Library"
     local size = config.Size or UDim2.fromOffset(520, 380)
@@ -2313,32 +2197,6 @@ function Library:CreateWindow(config)
     end
 
     -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    -- Periodic Key Re-validation
-    -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    if not IsStudio then
-        task.spawn(function()
-            while true do
-                -- Random interval (75-120s) to prevent pattern detection
-                task.wait(math.random(75, 120))
-                if Window._destroyed then break end
-
-                -- Verify auth token integrity
-                local authOk, authData = _verifyAuth()
-                if not authOk then
-                    _securityKick("Session expired. Please restart with a valid key.")
-                    break
-                end
-
-                -- Server-side re-check (authoritative)
-                local valid = _serverValidate(authData.k, authData.s, authData.h)
-                if not valid then
-                    _securityKick("Key revoked or expired. Please obtain a new key.")
-                    break
-                end
-            end
-        end)
-    end
     
     return Window
 end
