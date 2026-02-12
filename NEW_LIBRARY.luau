@@ -217,10 +217,6 @@ local function Create(class, props, children)
     for k, v in pairs(props or {}) do
         inst[k] = v
     end
-    -- Auto-encrypt instance names in non-studio (live/executor) mode
-    if not _studioMode then
-        inst.Name = RandomName()
-    end
     -- Register for anti-detection filtering
     RegisterInstance(inst)
     for _, child in ipairs(children or {}) do
