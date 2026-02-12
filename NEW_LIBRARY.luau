@@ -76,140 +76,6 @@ local FONT_MEDIUM  = Enum.Font.GothamMedium
 local FONT_REGULAR = Enum.Font.Gotham
 
 -- ════════════════════════════════════════════════════════════════
--- ANTI-DETECTION & NAME ENCRYPTION
--- ════════════════════════════════════════════════════════════════
-
---[[
-    Automatic anti-detection system:
-    1) RandomName   – generates cryptographic random instance names
-                      so games cannot find the UI by searching for
-                      known names like "RockSideGui", "Sidebar", etc.
-    2) Instance registry – weak table tracking every UI instance
-                           created by the library.
-    3) ApplyAntiDetection – hooks executor metamethods (__namecall,
-                            __index) to hide ALL library instances
-                            from game anti-cheat scripts that
-                            enumerate CoreGui / PlayerGui.
-    Supported executor APIs:
-        hookmetamethod, newcclosure, getnamecallmethod,
-        checkcaller, gethui
-]]
-
--- Cryptographic random name generator
-local _rng = Random.new(tick() * os.clock() * 1e4)
-local _nameLetters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-local _nameChars   = _nameLetters .. "0123456789"
-
-local function RandomName(minLen, maxLen)
-    minLen = minLen or 6
-    maxLen = maxLen or 14
-    local len = _rng:NextInteger(minLen, maxLen)
-    local buf = table.create(len)
-    -- First char must be a letter (valid Lua identifier start)
-    local idx = _rng:NextInteger(1, #_nameLetters)
-    buf[1] = string.sub(_nameLetters, idx, idx)
-    for i = 2, len do
-        idx = _rng:NextInteger(1, #_nameChars)
-        buf[i] = string.sub(_nameChars, idx, idx)
-    end
-    return table.concat(buf)
-end
-
--- Weak registry of all library-created instances (for hook filtering)
-local _guiRegistry = setmetatable({}, { __mode = "k" })
-
-local function RegisterInstance(inst)
-    _guiRegistry[inst] = true
-end
-
-local function IsOurInstance(inst)
-    return _guiRegistry[inst] == true
-end
-
--- Apply anti-detection hooks to hide UI from game anti-cheat scripts
--- Works with common executor APIs; gracefully degrades if unavailable
-local _antiDetectionApplied = false
-
-local function ApplyAntiDetection(rootGui)
-    if _studioMode or _antiDetectionApplied then return end
-
-    -- Detect executor environment
-    local _hook  = type(hookmetamethod) == "function" and hookmetamethod
-    local _newcc = type(newcclosure) == "function" and newcclosure or function(f) return f end
-    local _getnc = type(getnamecallmethod) == "function" and getnamecallmethod
-                   or (type(get_namecall_method) == "function" and get_namecall_method)
-    local _check = type(checkcaller) == "function" and checkcaller or function() return false end
-
-    if not (_hook and _getnc) then return end -- executor doesn't support required hooks
-    _antiDetectionApplied = true
-
-    -- Register root GUI and all current descendants
-    RegisterInstance(rootGui)
-    for _, desc in ipairs(rootGui:GetDescendants()) do
-        RegisterInstance(desc)
-    end
-    -- Auto-register any future descendants
-    rootGui.DescendantAdded:Connect(function(d) RegisterInstance(d) end)
-
-    -- Filter helper: remove our instances from result tables
-    local function Filter(tbl)
-        local out = {}
-        for i = 1, #tbl do
-            if not IsOurInstance(tbl[i]) then
-                out[#out + 1] = tbl[i]
-            end
-        end
-        return out
-    end
-
-    -- Hook __namecall: intercepts :GetChildren(), :GetDescendants(),
-    --   :FindFirstChild(), :FindFirstChildOfClass(), :FindFirstChildWhichIsA(),
-    --   :IsAncestorOf(), :IsDescendantOf()
-    pcall(function()
-        local oldNC
-        oldNC = _hook(game, "__namecall", _newcc(function(self, ...)
-            local method = _getnc()
-            -- Only filter calls from game scripts (not our own code)
-            if not _check() then
-                -- Hide from child / descendant enumeration
-                if method == "GetChildren" or method == "GetDescendants" then
-                    local r = oldNC(self, ...)
-                    if typeof(r) == "table" then
-                        return Filter(r)
-                    end
-                end
-                -- Hide from find methods
-                if method == "FindFirstChild" or method == "FindFirstChildOfClass"
-                  or method == "FindFirstChildWhichIsA" then
-                    local r = oldNC(self, ...)
-                    if r and IsOurInstance(r) then return nil end
-                end
-                -- Deny ancestry relationship checks
-                if method == "IsAncestorOf" then
-                    local target = ...
-                    if target and IsOurInstance(target) then return false end
-                end
-                if method == "IsDescendantOf" then
-                    if IsOurInstance(self) then return false end
-                end
-            end
-            return oldNC(self, ...)
-        end))
-    end)
-
-    -- Hook __index: spoof .Parent on our instances so game reads nil
-    pcall(function()
-        local oldIdx
-        oldIdx = _hook(game, "__index", _newcc(function(self, key)
-            if not _check() and IsOurInstance(self) then
-                if key == "Parent" then return nil end
-            end
-            return oldIdx(self, key)
-        end))
-    end)
-end
-
--- ════════════════════════════════════════════════════════════════
 -- UTILITIES
 -- ════════════════════════════════════════════════════════════════
 local function Create(class, props, children)
@@ -217,8 +83,6 @@ local function Create(class, props, children)
     for k, v in pairs(props or {}) do
         inst[k] = v
     end
-    -- Register for anti-detection filtering
-    RegisterInstance(inst)
     for _, child in ipairs(children or {}) do
         child.Parent = inst
     end
@@ -313,22 +177,13 @@ local function ProtectGui(gui)
         -- Studio mode: parent to PlayerGui for testing
         gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
     else
-        local ok = false
-        -- Attempt 1: gethui() — executor hidden UI container (most undetectable)
-        if type(gethui) == "function" then
-            ok = pcall(function() gui.Parent = gethui() end)
-        end
-        -- Attempt 2: CoreGui — standard hidden container
-        if not ok then
-            ok = pcall(function() gui.Parent = CoreGui end)
-        end
-        -- Attempt 3: PlayerGui — last resort
+        -- Live/executor mode: parent to CoreGui (hidden from game scripts)
+        local ok = pcall(function()
+            gui.Parent = CoreGui
+        end)
         if not ok then
             gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
         end
-        -- Activate anti-detection hooks (hides all library instances
-        -- from game scripts that enumerate CoreGui / PlayerGui)
-        ApplyAntiDetection(gui)
     end
 end
 
